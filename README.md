@@ -12,6 +12,61 @@
 
 ---
 
+Great question, Atul — this is a very common area of confusion in Azure networking, especially when dealing with hybrid or remote access scenarios. Let’s break it down cleanly:
+
+---
+
+## 🔵 Azure **Site-to-Site VPN (S2S VPN)** vs **Point-to-Site VPN (P2S VPN)**
+
+| Feature                    | **Site-to-Site VPN**                                                          | **Point-to-Site VPN**                                                          |
+| :------------------------- | :---------------------------------------------------------------------------- | :----------------------------------------------------------------------------- |
+| **Purpose**                | Connects an entire on-premises network (office, datacenter) to an Azure VNet. | Connects individual client devices (like laptops) to an Azure VNet.            |
+| **Type of Connection**     | **Network-to-Network**                                                        | **Client-to-Network**                                                          |
+| **Typical Use Cases**      | Hybrid cloud, branch office connectivity                                      | Remote developer/admin access, ad-hoc secure access                            |
+| **VPN Device Requirement** | Requires a compatible on-prem VPN device (firewall/router)                    | No VPN device needed — uses native VPN clients (Windows, macOS, Linux)         |
+| **Connection Initiation**  | Always-on or demand-based from the network gateway                            | User-initiated from the client device                                          |
+| **Protocols Supported**    | IKEv2, IPsec                                                                  | OpenVPN, IKEv2, SSTP                                                           |
+| **Authentication**         | Typically pre-shared keys (PSK) or certificates                               | Azure AD, Certificates, or RADIUS                                              |
+| **Scalability**            | Connects entire networks, scalable for branch offices                         | Meant for a few clients or small teams                                         |
+| **Pricing**                | Based on gateway SKU and data transfer                                        | Per connection and data transfer (minimal for light use)                       |
+| **Example Scenario**       | Company HQ connects its LAN to Azure VNet over VPN Gateway                    | Developer works remotely on a client machine connecting securely to Azure VNet |
+
+---
+
+## 📊 Visual Example
+
+**Site-to-Site VPN:**
+
+```
+[ On-Prem Network ] <--IPSec Tunnel--> [ Azure VPN Gateway ] --> [ Azure VNet ]
+```
+
+**Point-to-Site VPN:**
+
+```
+[ Laptop/Desktop ] <--VPN Client Connection--> [ Azure VPN Gateway ] --> [ Azure VNet ]
+```
+
+---
+
+## 📌 Quick Azure Resource Summary:
+
+* **Both require a VPN Gateway in Azure**
+* **Site-to-Site** requires a public-facing IP on the on-prem VPN device
+* **Point-to-Site** only needs client software and proper certificates or authentication setup
+
+---
+
+## 🔍 When to use what:
+
+| Scenario                                       | Recommended VPN Type           |
+| :--------------------------------------------- | :----------------------------- |
+| Permanent connectivity between office & Azure  | **Site-to-Site VPN**           |
+| Developers connecting from home/laptop         | **Point-to-Site VPN**          |
+| Multiple offices connected to Azure            | **Multiple Site-to-Site VPNs** |
+| Ad-hoc troubleshooting or test access to Azure | **Point-to-Site VPN**          |
+
+
 ## 📌 Create Common Resources (for both S2S and P2S)
 
 ### 📜 `azure-common-vpn-setup.sh`
@@ -147,3 +202,218 @@ bash azure-p2s-config.sh       # for Point-to-Site
 * **azure-s2s-connection.sh** → defines local network gateway (on-prem) and S2S connection
 * **azure-p2s-config.sh** → configures VPN Gateway for P2S connections with address pool and cert
 
+Excellent — let’s do both cleanly ✅
+I'll package this as:
+
+* 📦 **Terraform module** — production-ready, modular and parameterized
+* 📦 **Bicep template** — clean declarative ARM infrastructure-as-code
+
+---
+
+## 📦 Terraform Module — Azure VPN Setup
+
+📁 **Repo Structure**
+
+```
+azure-vpn-hybrid-terraform/
+├── main.tf
+├── variables.tf
+├── outputs.tf
+└── providers.tf
+```
+
+---
+
+### 📜 `providers.tf`
+
+```hcl
+provider "azurerm" {
+  features {}
+}
+```
+
+---
+
+### 📜 `variables.tf`
+
+```hcl
+variable "location" { default = "eastus" }
+variable "resource_group_name" { default = "MyVPNResourceGroup" }
+variable "vnet_name" { default = "MyVNet" }
+variable "vnet_address_space" { default = ["10.0.0.0/16"] }
+variable "subnet_prefix" { default = "10.0.1.0/24" }
+variable "gateway_subnet_prefix" { default = "10.0.255.0/27" }
+variable "public_ip_name" { default = "MyVPNGatewayPublicIP" }
+variable "vpn_gateway_name" { default = "MyVPNGateway" }
+variable "vpn_sku" { default = "VpnGw1" }
+variable "vpn_type" { default = "RouteBased" }
+variable "s2s_shared_key" { default = "myS2Ssharedkey" }
+variable "onprem_gateway_ip" { default = "203.0.113.10" }
+variable "onprem_address_prefix" { default = ["192.168.1.0/24"] }
+```
+
+---
+
+### 📜 `main.tf`
+
+```hcl
+resource "azurerm_resource_group" "vpn_rg" {
+  name     = var.resource_group_name
+  location = var.location
+}
+
+resource "azurerm_virtual_network" "vnet" {
+  name                = var.vnet_name
+  address_space       = var.vnet_address_space
+  location            = var.location
+  resource_group_name = azurerm_resource_group.vpn_rg.name
+}
+
+resource "azurerm_subnet" "subnet" {
+  name                 = "MySubnet"
+  resource_group_name  = azurerm_resource_group.vpn_rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = [var.subnet_prefix]
+}
+
+resource "azurerm_subnet" "gateway_subnet" {
+  name                 = "GatewaySubnet"
+  resource_group_name  = azurerm_resource_group.vpn_rg.name
+  virtual_network_name = azurerm_virtual_network.vnet.name
+  address_prefixes     = [var.gateway_subnet_prefix]
+}
+
+resource "azurerm_public_ip" "vpn_gateway_pip" {
+  name                = var.public_ip_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.vpn_rg.name
+  allocation_method   = "Static"
+  sku                 = "Standard"
+}
+
+resource "azurerm_virtual_network_gateway" "vpn_gateway" {
+  name                = var.vpn_gateway_name
+  location            = var.location
+  resource_group_name = azurerm_resource_group.vpn_rg.name
+  type                = "Vpn"
+  vpn_type            = var.vpn_type
+  active_active       = false
+  enable_bgp          = false
+  sku                 = var.vpn_sku
+
+  ip_configuration {
+    name                          = "vpngwconfig"
+    public_ip_address_id          = azurerm_public_ip.vpn_gateway_pip.id
+    private_ip_address_allocation = "Dynamic"
+    subnet_id                     = azurerm_subnet.gateway_subnet.id
+  }
+}
+
+resource "azurerm_local_network_gateway" "onprem" {
+  name                = "MyOnPremiseGateway"
+  location            = var.location
+  resource_group_name = azurerm_resource_group.vpn_rg.name
+  gateway_address     = var.onprem_gateway_ip
+  address_space       = var.onprem_address_prefix
+}
+
+resource "azurerm_virtual_network_gateway_connection" "s2s_connection" {
+  name                            = "MyS2SConnection"
+  location                        = var.location
+  resource_group_name             = azurerm_resource_group.vpn_rg.name
+  type                            = "IPsec"
+  virtual_network_gateway_id      = azurerm_virtual_network_gateway.vpn_gateway.id
+  local_network_gateway_id        = azurerm_local_network_gateway.onprem.id
+  shared_key                      = var.s2s_shared_key
+}
+```
+
+---
+
+### 📜 `outputs.tf`
+
+```hcl
+output "vpn_gateway_public_ip" {
+  value = azurerm_public_ip.vpn_gateway_pip.ip_address
+}
+```
+
+---
+
+## 📌 To Deploy:
+
+```bash
+terraform init
+terraform apply -auto-approve
+```
+
+---
+
+## 📦 Azure Bicep Template
+
+📁 **azure-vpn.bicep**
+
+```bicep
+param location string = 'eastus'
+param resourceGroupName string = 'MyVPNResourceGroup'
+param vnetName string = 'MyVNet'
+param vnetAddressSpace string = '10.0.0.0/16'
+param subnetPrefix string = '10.0.1.0/24'
+param gatewaySubnetPrefix string = '10.0.255.0/27'
+param publicIpName string = 'MyVPNGatewayPublicIP'
+param vpnGatewayName string = 'MyVPNGateway'
+param vpnType string = 'RouteBased'
+param vpnSku string = 'VpnGw1'
+
+resource vnet 'Microsoft.Network/virtualNetworks@2024-03-01' = {
+  name: vnetName
+  location: location
+  properties: {
+    addressSpace: { addressPrefixes: [vnetAddressSpace] }
+    subnets: [
+      { name: 'MySubnet' properties: { addressPrefix: subnetPrefix } }
+      { name: 'GatewaySubnet' properties: { addressPrefix: gatewaySubnetPrefix } }
+    ]
+  }
+}
+
+resource pip 'Microsoft.Network/publicIPAddresses@2024-03-01' = {
+  name: publicIpName
+  location: location
+  sku: { name: 'Standard' }
+  properties: { publicIPAllocationMethod: 'Static' }
+}
+
+resource vpngw 'Microsoft.Network/virtualNetworkGateways@2024-03-01' = {
+  name: vpnGatewayName
+  location: location
+  properties: {
+    gatewayType: 'Vpn'
+    vpnType: vpnType
+    sku: { name: vpnSku }
+    ipConfigurations: [
+      {
+        name: 'vpngwconfig'
+        properties: {
+          publicIPAddress: { id: pip.id }
+          subnet: { id: vnet.properties.subnets[1].id }
+          privateIPAllocationMethod: 'Dynamic'
+        }
+      }
+    ]
+  }
+}
+
+output vpnGatewayIp string = pip.properties.ipAddress
+```
+
+---
+
+## 📌 To Deploy:
+
+```bash
+az deployment group create --resource-group MyVPNResourceGroup --template-file azure-vpn.bicep
+```
+
+
+## ✅ Done.
