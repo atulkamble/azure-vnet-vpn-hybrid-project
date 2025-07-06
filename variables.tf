@@ -1,0 +1,13 @@
+variable "location" { default = "eastus" }
+variable "resource_group_name" { default = "MyVPNResourceGroup" }
+variable "vnet_name" { default = "MyVNet" }
+variable "vnet_address_space" { default = ["10.0.0.0/16"] }
+variable "subnet_prefix" { default = "10.0.1.0/24" }
+variable "gateway_subnet_prefix" { default = "10.0.255.0/27" }
+variable "public_ip_name" { default = "MyVPNGatewayPublicIP" }
+variable "vpn_gateway_name" { default = "MyVPNGateway" }
+variable "vpn_sku" { default = "VpnGw1" }
+variable "vpn_type" { default = "RouteBased" }
+variable "s2s_shared_key" { default = "myS2Ssharedkey" }
+variable "onprem_gateway_ip" { default = "203.0.113.10" }
+variable "onprem_address_prefix" { default = ["192.168.1.0/24"] }
